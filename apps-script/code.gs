@@ -32,6 +32,24 @@ const DRAFT_LIVE_CONFIG = Object.freeze({
   snapshotHashKey: 'nflDraft2026SnapshotHash',
 });
 
+const FANTASYPROS_CONFIG = Object.freeze({
+  baseUrl: 'https://api.fantasypros.com/public/v2/json',
+  sport: 'nfl',
+  apiKeyProperty: 'fantasyProsApiKey',
+  minSeason: 2012,
+  sourceLabel: 'FantasyPros Public API v2',
+  sheets: Object.freeze({
+    players: 'FantasyPros Players',
+    rankings: 'FantasyPros Rankings',
+    consensus: 'FantasyPros Consensus',
+    projections: 'FantasyPros Projections',
+    injuries: 'FantasyPros Injuries',
+    news: 'FantasyPros News',
+    playerPoints: 'FantasyPros Player Points',
+    history: 'FantasyPros History',
+  }),
+});
+
 const NAMED_SHEETS = Object.freeze({
   startHere: ['Start Here'],
   bigBoard: ['Big Board'],
@@ -196,6 +214,8 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Draft War Room')
     .addItem('Refresh now', 'refreshDraftNow')
+    .addItem('Refresh FantasyPros NFL data', 'refreshFantasyProsNflData')
+    .addItem('Import FantasyPros NFL history', 'importFantasyProsNflHistory')
     .addItem('Save current analysis', 'saveCurrentAnalysis')
     .addItem('Open report builder', 'openReportBuilder')
     .addItem('Generate report from builder', 'generateReportFromBuilder')
@@ -234,6 +254,26 @@ function removeTriggersByHandler_(handler) {
 
 function refreshDraftNow() {
   refreshDraftSnapshot_({initiator: 'MANUAL', showToast: true});
+}
+
+function refreshFantasyProsNflData() {
+  refreshFantasyProsNflData_({showToast: true});
+}
+
+function importFantasyProsNflHistory() {
+  const ui = SpreadsheetApp.getUi();
+  const currentSeason = new Date().getFullYear() - 1;
+  const response = ui.prompt(
+    'Import FantasyPros NFL history',
+    `Enter an inclusive season range from ${FANTASYPROS_CONFIG.minSeason} to ${currentSeason}, for example 2021-2025.`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return;
+  }
+  const years = parseFantasyProsSeasonRange_(response.getResponseText(), currentSeason);
+  importFantasyProsNflHistory_(years);
+  SpreadsheetApp.getActiveSpreadsheet().toast(`Imported FantasyPros NFL player points for ${years[0]} through ${years[years.length - 1]}.`, 'FantasyPros', 8);
 }
 
 function saveCurrentAnalysis() {
@@ -2803,6 +2843,274 @@ function refreshDraftSnapshot_(options) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function refreshFantasyProsNflData_(options) {
+  const started = Date.now();
+  const season = new Date().getFullYear();
+  try {
+    const payloads = {
+      players: fetchFantasyProsJson_('nfl/players', {ecr: 'included', show: 'pos_rank'}),
+      rankings: fetchFantasyProsJson_(`nfl/${season}/rankings`, {week: 0, range: 'true', rankstats: 'true'}),
+      consensus: fetchFantasyProsJson_(`nfl/${season}/consensus-rankings`, {position: 'ALL', type: 'DRAFT', scoring: 'PPR'}),
+      projections: fetchFantasyProsJson_(`nfl/${season}/projections`, {position: 'ALL', week: 0}),
+      injuries: fetchFantasyProsJson_('nfl/injuries', {year: season, include_probabilities: 'true'}),
+      news: fetchFantasyProsJson_('nfl/news', {limit: 100, order_by: 'updated'}),
+    };
+    const tables = [
+      {name: FANTASYPROS_CONFIG.sheets.players, rows: fantasyProsPlayerRows_(payloads.players)},
+      {name: FANTASYPROS_CONFIG.sheets.rankings, rows: fantasyProsRankingRows_(payloads.rankings, 'Rankings')},
+      {name: FANTASYPROS_CONFIG.sheets.consensus, rows: fantasyProsConsensusRows_(payloads.consensus)},
+      {name: FANTASYPROS_CONFIG.sheets.projections, rows: fantasyProsProjectionRows_(payloads.projections)},
+      {name: FANTASYPROS_CONFIG.sheets.injuries, rows: fantasyProsInjuryRows_(payloads.injuries)},
+      {name: FANTASYPROS_CONFIG.sheets.news, rows: fantasyProsNewsRows_(payloads.news)},
+    ];
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    tables.forEach(table => replaceFantasyProsSheet_(spreadsheet, table.name, table.rows));
+    appendFantasyProsLog_('SUCCESS', tables.reduce((total, table) => total + Math.max(table.rows.length - 1, 0), 0), Date.now() - started, `NFL refresh for ${season} completed.`);
+    if (options.showToast) {
+      spreadsheet.toast('FantasyPros NFL data refreshed.', 'FantasyPros', 8);
+    }
+  } catch (error) {
+    appendFantasyProsLog_('ERROR', 0, Date.now() - started, `NFL refresh failed: ${error.message}`);
+    throw error;
+  }
+}
+
+function importFantasyProsNflHistory_(years) {
+  const normalizedYears = Array.from(new Set(years)).sort((left, right) => left - right);
+  if (normalizedYears.length === 0) {
+    throw new Error('Select at least one valid FantasyPros season.');
+  }
+  const started = Date.now();
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) {
+    throw new Error('Another data import is already running.');
+  }
+  try {
+    const incomingRows = [FANTASYPROS_PLAYER_POINTS_HEADER];
+    normalizedYears.forEach(season => {
+      ['STD', 'HALF', 'PPR'].forEach(scoring => {
+        const payload = fetchFantasyProsJson_(`nfl/${season}/player-points`, {position: 'ALL', scoring});
+        incomingRows.push(...fantasyProsPlayerPointRows_(payload).slice(1));
+      });
+    });
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const existing = readFantasyProsRows_(spreadsheet, FANTASYPROS_CONFIG.sheets.playerPoints);
+    const importedKeys = new Set(incomingRows.slice(1).map(row => `${row[0]}::${row[1]}`));
+    const preserved = existing.slice(1).filter(row => row[0] !== '' && !importedKeys.has(`${row[0]}::${row[1]}`));
+    const rows = [FANTASYPROS_PLAYER_POINTS_HEADER].concat(preserved, incomingRows.slice(1));
+    replaceFantasyProsSheet_(spreadsheet, FANTASYPROS_CONFIG.sheets.playerPoints, rows);
+    buildFantasyProsHistory_(spreadsheet, rows);
+    appendFantasyProsLog_('HISTORY', incomingRows.length - 1, Date.now() - started, `Imported NFL player points for ${normalizedYears.join(', ')}.`);
+  } catch (error) {
+    appendFantasyProsLog_('ERROR', 0, Date.now() - started, `Historical import failed: ${error.message}`);
+    throw error;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+const FANTASYPROS_PLAYER_POINTS_HEADER = Object.freeze([
+  'Season', 'Scoring', 'Player ID', 'Player', 'Position', 'Team', 'Games', 'Points', 'Average', 'Weekly Points JSON', 'Imported At',
+]);
+
+function fetchFantasyProsJson_(path, query) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty(FANTASYPROS_CONFIG.apiKeyProperty);
+  if (!apiKey) {
+    throw new Error('FantasyPros API key is not configured in Script Properties.');
+  }
+  const parameters = Object.keys(query || {})
+    .filter(key => query[key] !== null && query[key] !== undefined && query[key] !== '')
+    .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(String(query[key]))}`);
+  const url = `${FANTASYPROS_CONFIG.baseUrl}/${path}${parameters.length ? `?${parameters.join('&')}` : ''}`;
+  const response = UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    headers: {Accept: 'application/json', 'x-api-key': apiKey},
+  });
+  const statusCode = response.getResponseCode();
+  if (statusCode !== 200) {
+    throw new Error(`FantasyPros returned HTTP ${statusCode} for ${path}.`);
+  }
+  try {
+    return JSON.parse(response.getContentText());
+  } catch (error) {
+    throw new Error(`FantasyPros returned invalid JSON for ${path}.`);
+  }
+}
+
+function fantasyProsPlayerRows_(payload) {
+  requireFantasyProsArray_(payload, 'players', 'players');
+  return [['Player ID', 'Player', 'Position', 'Positions', 'Team', 'ECR', 'ADP', 'Birthdate', 'Age', 'Status', 'External IDs JSON', 'Fetched At']].concat(
+    payload.players.map(player => [
+      player.player_id || '', player.player_name || '', player.position_id || '', (player.positions || []).join(', '), player.team_id || '',
+      player.rank_ecr || '', player.rank_adp || '', player.birthdate || '', player.age || '', player.status || '', JSON.stringify(player.external_ids || {}), new Date(),
+    ])
+  );
+}
+
+function fantasyProsRankingRows_(payload, source) {
+  requireFantasyProsArray_(payload, 'players', source.toLowerCase());
+  const rows = payload.players.flatMap(player => {
+      const rank = player.rank || {};
+      return fantasyProsRankingMetricKeys_(rank).map(metricKey => [
+        source, payload.year || payload.season || '', payload.week || '', payload.ranking_type_name || '', metricKey || payload.scoring || '', payload.position_id || '',
+        player.id || '', player.player_name || '', player.team_id || '', (player.positions || []).join(', '),
+        fantasyProsRankMetric_(rank.ECR, metricKey), fantasyProsRankMetric_(rank.ECR_MIN, metricKey), fantasyProsRankMetric_(rank.ECR_MAX, metricKey), fantasyProsRankMetric_(rank.ECR_STD, metricKey), fantasyProsRankMetric_(rank.ADP, metricKey), new Date(),
+      ]);
+    });
+  return [['Source', 'Season', 'Week', 'Type', 'Scoring', 'Position', 'Player ID', 'Player', 'Team', 'Positions', 'ECR', 'Minimum', 'Maximum', 'Standard Deviation', 'ADP', 'Fetched At']].concat(rows);
+}
+
+function fantasyProsConsensusRows_(payload) {
+  requireFantasyProsArray_(payload, 'players', 'consensus');
+  return [['Source', 'Season', 'Week', 'Type', 'Scoring', 'Position', 'Player ID', 'Player', 'Team', 'Positions', 'ECR', 'Minimum', 'Maximum', 'Standard Deviation', 'ADP', 'Fetched At']].concat(
+    payload.players.map(player => [
+      'Consensus', payload.year || '', payload.week || '', payload.ranking_type_name || '', payload.scoring || '', payload.position_id || '',
+      player.player_id || '', player.player_name || '', player.player_team_id || '', player.player_positions || '',
+      player.rank_ecr || '', player.rank_min || '', player.rank_max || '', player.rank_std || '', player.rank_adp || '', new Date(),
+    ])
+  );
+}
+
+function fantasyProsRankingMetricKeys_(rank) {
+  const metric = rank.ECR || {};
+  const keys = Object.keys(metric).filter(key => metric[key] && typeof metric[key] === 'object' && metric[key].ALL !== undefined);
+  return keys.length ? keys : [''];
+}
+
+function fantasyProsRankMetric_(metric, metricKey) {
+  if (metric === null || metric === undefined) {
+    return '';
+  }
+  if (typeof metric !== 'object') {
+    return metric;
+  }
+  if (metricKey && metric[metricKey] && typeof metric[metricKey] === 'object') {
+    return metric[metricKey].ALL === undefined ? '' : metric[metricKey].ALL;
+  }
+  return metric.ALL === undefined ? '' : metric.ALL;
+}
+
+function fantasyProsProjectionRows_(payload) {
+  requireFantasyProsArray_(payload, 'players', 'projections');
+  return [['Season', 'Week', 'Position', 'Player ID', 'Player', 'Team', 'Projected Stats JSON', 'Fetched At']].concat(
+    payload.players.map(player => [
+      payload.season || '', payload.week || '', player.position_id || '', player.fpid || player.player_id || '', player.name || '', player.team_id || '', JSON.stringify(player.stats || {}), new Date(),
+    ])
+  );
+}
+
+function fantasyProsInjuryRows_(payload) {
+  requireFantasyProsArray_(payload, 'injuries', 'injuries');
+  return [['Player ID', 'Player', 'Position', 'Team', 'Status', 'Short Status', 'Probability of Playing', 'Injury Type', 'Practice 1', 'Practice 2', 'Practice 3', 'Fetched At']].concat(
+    payload.injuries.map(injury => [
+      injury.player_id || '', injury.name || '', '', '', injury.status || '', injury.status_short || '', injury.probability_of_playing || '', injury.injury_type || injury.practice_report_injury_type || '', injury.practice_1 || '', injury.practice_2 || '', injury.practice_3 || '', new Date(),
+    ])
+  );
+}
+
+function fantasyProsNewsRows_(payload) {
+  requireFantasyProsArray_(payload, 'items', 'news');
+  return [['News ID', 'Created', 'Updated', 'Player ID', 'Team', 'Categories', 'Title', 'Summary', 'Impact', 'Link', 'Author', 'Fetched At']].concat(
+    payload.items.map(item => [
+      item.id || '', item.created || '', item.updated || '', item.player_id || '', item.team_id || '', (item.categories || []).join(', '), item.title || '', item.desc || '', item.impact || '', item.link || '', item.author || '', new Date(),
+    ])
+  );
+}
+
+function fantasyProsPlayerPointRows_(payload) {
+  requireFantasyProsArray_(payload, 'players', 'player points');
+  return [FANTASYPROS_PLAYER_POINTS_HEADER].concat(payload.players.map(player => [
+    payload.season || '', payload.scoring || '', player.player_id || '', player.player_name || '', player.position_id || '', player.team_id || '', player.games || '', player.points || '', player.average || '', JSON.stringify(player.weeks || {}), new Date(),
+  ]));
+}
+
+function requireFantasyProsArray_(payload, key, source) {
+  if (!payload || !Array.isArray(payload[key])) {
+    throw new Error(`FantasyPros ${source} response did not contain ${key}.`);
+  }
+}
+
+function parseFantasyProsSeasonRange_(input, currentSeason) {
+  const match = /^\s*(\d{4})\s*-\s*(\d{4})\s*$/.exec(String(input || ''));
+  if (!match) {
+    throw new Error('Enter seasons as YYYY-YYYY.');
+  }
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (start < FANTASYPROS_CONFIG.minSeason || end > currentSeason || start > end) {
+    throw new Error(`Choose an inclusive range from ${FANTASYPROS_CONFIG.minSeason} to ${currentSeason}.`);
+  }
+  return Array.from({length: end - start + 1}, (_, index) => start + index);
+}
+
+function findFantasyProsSheet_(spreadsheet, name) {
+  return spreadsheet.getSheets().find(sheet => sheet.getName() === name) || null;
+}
+
+function readFantasyProsRows_(spreadsheet, name) {
+  const sheet = findFantasyProsSheet_(spreadsheet, name);
+  if (!sheet) {
+    return [];
+  }
+  const rowCount = Math.max(sheet.getLastRow(), 1);
+  const columnCount = Math.max(sheet.getLastColumn(), 1);
+  return sheet.getRange(1, 1, rowCount, columnCount).getValues();
+}
+
+function replaceFantasyProsSheet_(spreadsheet, name, rows) {
+  const width = rows[0].length;
+  let sheet = findFantasyProsSheet_(spreadsheet, name);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(name);
+  }
+  ensureRows_(sheet, Math.max(sheet.getLastRow(), rows.length));
+  ensureColumns_(sheet, Math.max(sheet.getLastColumn(), width));
+  sheet.getRange(1, 1, Math.max(sheet.getLastRow(), rows.length), Math.max(sheet.getLastColumn(), width)).clearContent();
+  sheet.getRange(1, 1, rows.length, width).setValues(rows);
+  sheet.getRange(1, 1, 1, width).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+function buildFantasyProsHistory_(spreadsheet, playerPointRows) {
+  const groups = {};
+  playerPointRows.slice(1).filter(row => row[1] === 'PPR').forEach(row => {
+    const key = `${row[2]}::${row[3]}`;
+    if (!groups[key]) {
+      groups[key] = {player: row[3], position: row[4], team: row[5], seasons: 0, points: 0, games: 0};
+    }
+    groups[key].seasons += 1;
+    groups[key].points += Number(row[7]) || 0;
+    groups[key].games += Number(row[6]) || 0;
+  });
+  const historyRows = [
+    ['FantasyPros NFL History', '', '', '', '', '', ''],
+    ['PPR player performance from imported seasons', '', '', '', '', '', ''],
+    ['', '', '', '', '', '', ''],
+    ['Player', 'Position', 'Last Team', 'Seasons', 'Total Points', 'Average Points per Season', 'Average Points per Game'],
+  ];
+  Object.keys(groups).map(key => groups[key]).sort((left, right) => right.points - left.points || left.player.localeCompare(right.player)).forEach(group => {
+    historyRows.push([
+      group.player, group.position, group.team, group.seasons, group.points,
+      group.seasons === 0 ? 0 : group.points / group.seasons,
+      group.games === 0 ? 0 : group.points / group.games,
+    ]);
+  });
+  const sheet = replaceFantasyProsSheet_(spreadsheet, FANTASYPROS_CONFIG.sheets.history, historyRows);
+  sheet.getRange(4, 1, 1, historyRows[3].length).setFontWeight('bold');
+  return sheet;
+}
+
+function appendFantasyProsLog_(status, rows, durationMs, message) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const log = findSheetById_(spreadsheet, DRAFT_LIVE_CONFIG.logSheetId);
+  if (!log) {
+    return;
+  }
+  log.appendRow([new Date(), status, rows, 0, durationMs, message, FANTASYPROS_CONFIG.baseUrl, '']);
+  log.getRange(log.getLastRow(), 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
 }
 
 function fetchOfficialDraftSnapshot_() {

@@ -8,6 +8,10 @@ Before the draft, set `_config!B3`, `_config!B6:B7`, active league rows, franchi
 
 Monitor Dashboard live feed status, `_updates!B6` freshness, Commissioner Dashboard, and the newest `Update Log` row. For source or authorization failures, keep the last good snapshot, stop retry loops if the source shape changed, and use a manual refresh only after the issue is understood. Once a scheduled refresh validates all 257 picks it removes its own trigger and logs `COMPLETE`, so no manual teardown is required after the draft; `Remove scheduled updates` remains available for an early stop.
 
+## fantasypros-data-runbook
+
+Request the FantasyPros public API key, set it as the Apps Script property `fantasyProsApiKey` while signed in as the durable commissioner account, then reopen the workbook and select `Draft War Room > Refresh FantasyPros NFL data`. Confirm the six `FantasyPros-*` latest-data tabs and the `Update Log` success row. To create a historical view, select `Draft War Room > Import FantasyPros NFL history`, enter a supported inclusive range such as `2021-2025`, then inspect `FantasyPros Player Points` and `FantasyPros History`. The import replaces requested season and scoring combinations on rerun, preserves other stored seasons, and does not schedule recurring requests. If the provider returns an error, no source tab is replaced; correct the key or provider issue before retrying.
+
 ## workbook-maintenance
 
 After attaching the Apps Script, run `Draft War Room > Repair known issues` once to apply the fixes recorded in `docs/workbook-audit-2026-08-27.md`, then `Apply workbook theme` for consistent fonts, headers, freezes, banding, and number formats, then `Rebuild dashboard charts` for the Dashboard visual story (six draft charts, plus Championship Odds and Saved Analysis Performance once those surfaces exist), then `Update Start Here guide` and `Rebuild mobile view` so navigation and the phone view match the workbook. All five actions are idempotent, log to `Update Log`, and skip or overwrite only generated content. Finish with `Run system checks`.
