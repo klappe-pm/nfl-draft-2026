@@ -49,6 +49,8 @@ The same review confirmed that the documented injury schema uses `name` and `inj
 
 A follow-up review confirmed that consensus rankings use a separate documented player shape with flat `rank_ecr` values, so the workbook now uses a dedicated consensus normalizer and fixture. It also found that general ranking metrics may be nested by scoring key. The ranking normalizer now emits one row for every documented scoring metric that contains an `ALL` value, preserving those variants instead of discarding them.
 
+The first pull-request attempt exposed that the original local baseline had no common commit with `origin/main`. The remote default contains only its initial repository files, so this branch was rebuilt from `origin/main` by applying the local baseline and this feature with ordinary cherry-pick commits. No history was rewritten or force-pushed.
+
 ## risks-and-non-goals
 
 The public API does not expose a user's private fantasy-league roster, matchup, transaction, waiver, or draft history. Those questions require a league-host API or an imported league export and are explicitly excluded. Historical depth depends on the provider returning records for the requested season and on the API key's entitlement. The first import is intentionally manual so the commissioner controls quota use.
