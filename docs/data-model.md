@@ -6,6 +6,8 @@
 
 Fantasy league teams use `_config!F2:F13` as the display key and `_config!E2:E13` as the stable team ID. Manager, contact, optional NFL franchise, colors, logo, draft slot, active state, and notes are stored in `_config!G:P`. Fantasy settings use the rule label in `_config!S:S` as the key and the editable value in `_config!T:T` as the value.
 
+`FantasyPros Players`, `FantasyPros Rankings`, `FantasyPros Consensus`, `FantasyPros Projections`, `FantasyPros Injuries`, and `FantasyPros News` are replace-on-success source tables. `FantasyPros Player Points` is a normalized historical fact table keyed by Season, Scoring, and Player ID. `FantasyPros History` summarizes the stored PPR facts by player with seasons, total points, average points per season, and average points per game.
+
 ## derived-relationships
 
 Tracker player names in `Players-Draft Tracker!A:A` join to `Big Board!B:B` for position, college, board rank, NFL grade, production, and athleticism, and to `_actuals!E:E` for actual pick, team, round, and overall. Team views and analytics join `_actuals!E:E` to `Big Board!B:B` for per-pick grades and board ranks. `Team-Needs` is a manual input source for the tracker Need Fit column, but it does not alter draft results, grades, or rankings. `Team-Report!L3` and `Team-Compare!B52`, `G52`, and `L52` join to `_config!F2:F13`; manager, draft slot, and optional NFL franchise are returned with `XLOOKUP`.

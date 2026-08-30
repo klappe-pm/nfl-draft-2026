@@ -15,3 +15,7 @@ NFL franchise entries use the `_nfl_info` franchise list and remain optional whe
 ## ownership-and-sharing
 
 Only the durable commissioner account should install the trigger. Editors share one cloud-hosted state and do not run local refresh tooling. Never commit participant names, contacts, credentials, OAuth artifacts, or private league details.
+
+## fantasypros-api-key
+
+The FantasyPros key is an Apps Script property named `fantasyProsApiKey`, set only by the durable commissioner account. It is not a `_config` value and must never be entered into a sheet cell, source-controlled file, Update Log message, export, or screenshot. The public API is data-only and does not authenticate to or import the private fantasy-league host.

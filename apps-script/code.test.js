@@ -1799,3 +1799,126 @@ test('applyWorkbookTheme formats the resolved grade and value columns', () => {
   assert.ok(formatted.some(entry => entry.startsWith('D2:') && entry.endsWith(':0')), `Value vs Rank in D must get 0, got: ${formatted}`);
   assert.ok(!formatted.some(entry => entry.startsWith('I2:')), 'the Act Team text column must not get a number format');
 });
+
+function fantasyProsResponse(body, statusCode = 200) {
+  return {
+    getResponseCode: () => statusCode,
+    getContentText: () => JSON.stringify(body),
+  };
+}
+
+test('fetchFantasyProsJson_ sends the API key only in the request header', () => {
+  const {context, state} = buildContext();
+  state.properties.set('fantasyProsApiKey', 'test-key');
+  let request;
+  context.UrlFetchApp.fetch = (url, options) => {
+    request = {url, options};
+    return fantasyProsResponse({players: []});
+  };
+  assert.deepEqual(context.fetchFantasyProsJson_('nfl/players', {show: 'pos_rank'}), {players: []});
+  assert.match(request.url, /nfl\/players\?show=pos_rank$/);
+  assert.ok(!request.url.includes('test-key'), 'the API key must never enter a URL');
+  assert.equal(request.options.headers['x-api-key'], 'test-key');
+});
+
+test('FantasyPros refresh refuses a missing API key before any request or sheet write', () => {
+  const {context, sheets} = buildContext();
+  let fetched = false;
+  context.UrlFetchApp.fetch = () => {
+    fetched = true;
+    return fantasyProsResponse({});
+  };
+  assert.throws(() => context.refreshFantasyProsNflData_({showToast: false}), /API key is not configured/);
+  assert.equal(fetched, false);
+  assert.equal(findSheet(sheets, 'FantasyPros Players'), undefined);
+});
+
+test('FantasyPros refresh normalizes NFL data only after every response validates', () => {
+  const {context, state, sheets} = buildContext();
+  state.properties.set('fantasyProsApiKey', 'test-key');
+  context.UrlFetchApp.fetch = url => {
+    if (url.includes('/players?')) {
+      return fantasyProsResponse({players: [{player_id: 1, player_name: 'Player One', position_id: 'RB', positions: ['RB'], team_id: 'KC', rank_ecr: 5, rank_adp: 7}]});
+    }
+    if (url.includes('/rankings?')) {
+      return fantasyProsResponse({season: '2026', week: '0', players: [{id: 1, player_name: 'Player One', position_id: 'RB', team_id: 'KC', positions: ['RB'], rank: {ECR: {ALL: 5}, ECR_MIN: {ALL: 3}, ECR_MAX: {ALL: 9}, ECR_STD: {ALL: 1.2}, ADP: {ALL: 7}}}]});
+    }
+    if (url.includes('/consensus-rankings?')) {
+      return fantasyProsResponse({year: '2026', week: '0', scoring: 'PPR', position_id: 'ALL', ranking_type_name: 'DRAFT', players: [{player_id: 1, player_name: 'Player One', player_team_id: 'KC', player_positions: 'RB', rank_ecr: 4, rank_min: 2, rank_max: 7, rank_std: 1.1}]});
+    }
+    if (url.includes('/projections?')) {
+      return fantasyProsResponse({season: '2026', week: '0', players: [{fpid: 1, name: 'Player One', position_id: 'RB', team_id: 'KC', stats: [{points_ppr: 200}]}]});
+    }
+    if (url.includes('/injuries?')) {
+      return fantasyProsResponse({injuries: [{player_id: 1, name: 'Player One', status: 'Questionable', status_short: 'Q', probability_of_playing: '0.5', injury_type: 'Hamstring', practice_1: 'Limited', practice_2: 'Full', practice_3: 'Full'}]});
+    }
+    if (url.includes('/news?')) {
+      return fantasyProsResponse({items: [{id: 8, player_id: 1, team_id: 'KC', categories: ['News'], title: 'Player One update'}]});
+    }
+    throw new Error(`unexpected URL ${url}`);
+  };
+  context.refreshFantasyProsNflData_({showToast: false});
+  const players = findSheet(sheets, 'FantasyPros Players');
+  const rankings = findSheet(sheets, 'FantasyPros Rankings');
+  const consensus = findSheet(sheets, 'FantasyPros Consensus');
+  const injuries = findSheet(sheets, 'FantasyPros Injuries');
+  const news = findSheet(sheets, 'FantasyPros News');
+  assert.equal(players.cellAt(2, 2), 'Player One');
+  assert.equal(rankings.cellAt(2, 11), 5);
+  assert.equal(consensus.cellAt(2, 7), 1);
+  assert.equal(consensus.cellAt(2, 9), 'KC');
+  assert.equal(consensus.cellAt(2, 10), 'RB');
+  assert.equal(consensus.cellAt(2, 11), 4);
+  assert.equal(injuries.cellAt(2, 2), 'Player One');
+  assert.equal(injuries.cellAt(2, 3), '');
+  assert.equal(injuries.cellAt(2, 4), '');
+  assert.equal(injuries.cellAt(2, 8), 'Hamstring');
+  assert.equal(news.cellAt(2, 7), 'Player One update');
+  assert.ok(!players.getDataRange().getDisplayValues().flat().includes('test-key'), 'the API key must never be persisted');
+});
+
+test('FantasyPros rankings preserve each documented nested scoring metric', () => {
+  const {context} = buildContext();
+  const rows = context.fantasyProsRankingRows_({
+    season: '2026',
+    week: '0',
+    players: [{id: 1, player_name: 'Player One', position_id: 'ALL', team_id: 'KC', positions: ['RB'], rank: {ECR: {STD: {ALL: 191}, PPR: {ALL: 195}}, ECR_MIN: {STD: {ALL: 180}, PPR: {ALL: 185}}, ECR_MAX: {STD: {ALL: 200}, PPR: {ALL: 205}}, ECR_STD: {STD: {ALL: 2}, PPR: {ALL: 3}}, ADP: {STD: {ALL: 190}, PPR: {ALL: 194}}}}],
+  }, 'Rankings');
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.slice(1).map(row => [row[4], row[10], row[11], row[14]]), [['STD', 191, 180, 190], ['PPR', 195, 185, 194]]);
+});
+
+test('FantasyPros historical import replaces requested seasons and builds a PPR history view', () => {
+  const {context, state, sheets} = buildContext();
+  state.properties.set('fantasyProsApiKey', 'test-key');
+  context.UrlFetchApp.fetch = url => {
+    const scoring = /scoring=(STD|HALF|PPR)/.exec(url)[1];
+    const points = scoring === 'PPR' ? 20 : 10;
+    return fantasyProsResponse({
+      season: '2024',
+      scoring,
+      players: [{player_id: 1, player_name: 'Player One', position_id: 'RB', team_id: 'KC', games: 2, points, average: points / 2, weeks: {'1': 8, '2': points - 8}}],
+    });
+  };
+  context.importFantasyProsNflHistory_([2024]);
+  context.importFantasyProsNflHistory_([2024]);
+  const points = findSheet(sheets, 'FantasyPros Player Points');
+  const history = findSheet(sheets, 'FantasyPros History');
+  assert.equal(points.getLastRow(), 4, 'reimport must replace each requested scoring season instead of duplicating it');
+  assert.equal(history.cellAt(5, 1), 'Player One');
+  assert.equal(history.cellAt(5, 5), 20);
+  assert.equal(history.cellAt(5, 7), 10);
+});
+
+test('FantasyPros historical import refuses while the document lock is busy', () => {
+  const {context, state, sheets} = buildContext({lockBusy: true});
+  state.properties.set('fantasyProsApiKey', 'test-key');
+  let fetched = false;
+  context.UrlFetchApp.fetch = () => {
+    fetched = true;
+    return fantasyProsResponse({players: []});
+  };
+  assert.throws(() => context.importFantasyProsNflHistory_([2024]), /Another data import is already running/);
+  assert.equal(fetched, false);
+  assert.equal(findSheet(sheets, 'FantasyPros Player Points'), undefined);
+});
