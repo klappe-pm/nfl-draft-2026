@@ -1,0 +1,28 @@
+# Keep the public repository source-only by default.
+*
+
+# Repository metadata and publication-safe materials.
+!.gitignore
+!README.md
+!LICENSE
+!.github/
+!.github/**
+!apps-script/
+!apps-script/**
+!docs/
+!docs/**
+!diagrams/
+!diagrams/**
+!tests/
+!tests/**
+
+# Never publish local secrets, exports, reference workbooks, or operating-system files.
+.DS_Store
+.env
+.env.*
+*.xls
+*.xlsm
+*.xlsx
+*.csv
+*.tsv
+*.pdf
