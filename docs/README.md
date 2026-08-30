@@ -1,0 +1,13 @@
+# nfl-draft-2026-sheets
+
+## purpose
+
+This repository contains the publishable source for the shared [2026 NFL Draft Google Sheet](https://docs.google.com/spreadsheets/d/1dKiRihsHrOeQyGy3YpROZPoI012vtPU3lF3f6DNSr3k/edit). It does not include exports, reference workbooks, participant data, or credentials.
+
+## status
+
+The workbook has an official 257-pick source table, a 423-player Big Board, live formulas, five-player and three-team comparison views, a Commissioner Dashboard, Draft Rules, and an Analytics data layer. The Draft War Room menu carries repair, theme, and chart-rebuild actions that fix the defects recorded in [workbook-audit-2026-08-27](workbook-audit-2026-08-27.md), apply consistent formatting, and place six native charts on Dashboard. The menu also rebuilds the `Start Here` guide, saves any analysis view as a values-only snapshot tab with a performance-tracked index row in `Analysis-Saved`, builds a phone-friendly vertical `Mobile` tab, builds a `Season Forecast` tab with head-to-head odds, expected wins, and champion odds from editable power ratings, builds a `Recommendations` tab of live ranked options, builds a `Draft Optimizer` snake board that recommends the best available pick as the league drafts, links player names to their `Player-Bios` rows, and carries a `Report Builder` that composes custom reports across every workbook dimension into live or frozen tabs registered centrally in `Analysis-Saved`. Cloud refresh remains inactive until the Apps Script project is attached and authorized by the durable commissioner account; once installed, the scheduled poller stops itself after all 257 picks validate, and one week after completion a daily check flips the Mobile tab to season focus and moves it to the front.
+
+## onboarding
+
+Use `Start Here` for navigation, configure the shared league in `_config`, assign the commissioner in `_config!B3`, review `Draft Rules`, then attach `apps-script/code.gs` to the spreadsheet and run the Draft War Room installer. After attachment run `Repair known issues`, `Apply workbook theme`, `Rebuild dashboard charts`, `Update Start Here guide`, `Rebuild mobile view`, and `Run system checks`, and rerun the checks after any significant configuration change.

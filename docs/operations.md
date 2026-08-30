@@ -1,0 +1,19 @@
+# operations
+
+## draft-day-runbook
+
+Before the draft, set `_config!B3`, `_config!B6:B7`, active league rows, franchise assignments, and draft slots. Confirm `Draft Rules` has no unresolved required inputs. Attach the Apps Script as the durable commissioner account, install one-minute updates, run Refresh now, and confirm `_updates` and `Update Log` record success.
+
+## monitoring-and-incident-response
+
+Monitor Dashboard live feed status, `_updates!B6` freshness, Commissioner Dashboard, and the newest `Update Log` row. For source or authorization failures, keep the last good snapshot, stop retry loops if the source shape changed, and use a manual refresh only after the issue is understood. Once a scheduled refresh validates all 257 picks it removes its own trigger and logs `COMPLETE`, so no manual teardown is required after the draft; `Remove scheduled updates` remains available for an early stop.
+
+## workbook-maintenance
+
+After attaching the Apps Script, run `Draft War Room > Repair known issues` once to apply the fixes recorded in `docs/workbook-audit-2026-08-27.md`, then `Apply workbook theme` for consistent fonts, headers, freezes, banding, and number formats, then `Rebuild dashboard charts` for the Dashboard visual story (six draft charts, plus Championship Odds and Saved Analysis Performance once those surfaces exist), then `Update Start Here guide` and `Rebuild mobile view` so navigation and the phone view match the workbook. All five actions are idempotent, log to `Update Log`, and skip or overwrite only generated content. Finish with `Run system checks`.
+
+Run `Link player names to bios` once after setup (and again after large Big Board edits) to make player names clickable links into `Player-Bios`; it converts only static name cells and never touches formulas. `Repair known issues` now also restores the Players-Compare view against its live vertical layout: it fills the `Actual Vs Projected` row from the Big Board delta column and turns the five grid headers into bio links that follow the selectors.
+
+For composed analysis across any dimensions, run `Open report builder`, pick section types (draft overview, NFL team draft, position group, college cohort, player spotlight, value board, fantasy team outlook, forecast summary, fantasy draft board, or any custom range), set focus values from the Focus Choices block, choose `Live` or `Frozen` output, then run `Generate report from builder`. Live reports land on a `Report - <name>` tab that regenerates in place; frozen reports become unique grey `Saved - <name>` tabs. Every generated report registers in `Analysis-Saved` alongside quick saves, which stays the single registry of everything saved. Before the league draft, run `Build draft optimizer` and record each pick in its Draft Board Player column; On The Clock, Recommended Now, best-by-group, and scarcity counts rerank live, and recorded picks plus the round count survive rebuilds.
+
+At season start, run `Build season forecast` and `Build recommendations`, then keep the forecast's `Power Rating` and `Actual Wins` columns current each week; head-to-head odds, expected wins, champion odds, fair betting lines, the forecast charts, and the recommendation lists recalculate live. One week after the draft completes, the daily `seasonFocusCheck` trigger flips `Mobile` to season mode, builds the forecast and recommendations if missing, moves `Mobile` to the front of the tab list, logs `SEASON`, and removes itself; rerun `Rebuild mobile view` at any time to refresh the view manually. `Update Start Here guide`, `Rebuild mobile view`, `Build season forecast`, `Build recommendations`, and `Build draft optimizer` overwrite their generated tabs by design, preserving only declared editable inputs (forecast ratings, actual wins, season length; optimizer picks and rounds).
